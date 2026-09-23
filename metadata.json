@@ -1,0 +1,8 @@
+{
+  "name": "إيروما مانجا",
+  "description": "تطبيق إيروما مانجا لقراءة المانجا والمنهوا مع دعم المصادر الحقيقية وإدارة المكتبة والتصنيفات والتنزيل للقراءة دون إنترنت.",
+  "requestFramePermissions": [],
+  "majorCapabilities": [
+    "MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"
+  ]
+}
