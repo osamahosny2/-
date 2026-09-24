@@ -55,7 +55,7 @@ android {
   buildFeatures {
     compose = true
     buildConfig = true
-  }ج
+  }
   testOptions { unitTests { isIncludeAndroidResources = true } }
   dependenciesInfo {
     includeInApk = false
