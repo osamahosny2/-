@@ -496,7 +496,7 @@ class ConnectorEngine {
     }
 
     private fun isMangaDex(source: SourceItem?): Boolean {
-        if (source == null) return true
+        if (source == null) return false
         return source.baseUrl.contains("mangadex.org", ignoreCase = true) ||
             source.id.contains("mangadex", ignoreCase = true) ||
             source.name.contains("mangadex", ignoreCase = true)
