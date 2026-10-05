@@ -257,7 +257,7 @@ class MangaViewModel(application: Application) : AndroidViewModel(application) {
     private fun loadChaptersForManga(mangaId: String) {
         viewModelScope.launch {
             _isLoadingChapters.value = true
-            val source = _sources.value.firstOrNull { it.id == (_selectedManga.value?.sourceId ?: "") }
+            val source = sources.value.firstOrNull { it.id == (_selectedManga.value?.sourceId ?: "") }
             val result = repository.connector.fetchChapters(mangaId, source)
             if (result.isSuccess) {
                 val chapters = result.getOrDefault(emptyList())
@@ -301,7 +301,7 @@ class MangaViewModel(application: Application) : AndroidViewModel(application) {
             }
 
             // Otherwise fetch real pages from network
-            val source = _sources.value.firstOrNull { it.id == (currentManga?.sourceId ?: "") }
+            val source = sources.value.firstOrNull { it.id == (currentManga?.sourceId ?: "") }
             val result = repository.connector.fetchChapterPages(chapter.id, source)
             if (result.isSuccess) {
                 _readerPages.value = result.getOrDefault(emptyList())
