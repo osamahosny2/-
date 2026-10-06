@@ -31,31 +31,31 @@ class ConnectorEngine {
         "Mozilla/5.0 (Linux; Android 15; Mobile) AppleWebKit/537.36 " +
             "(KHTML, like Gecko) Chrome/128.0.0.0 Mobile Safari/537.36"
 
-    suspend fun searchManga(query: String, source: SourceItem?): Result<List<MangaItem>> =
+    suspend fun searchManga(query: String, source: SourceItem?, page: Int = 1): Result<List<MangaItem>> =
         withContext(Dispatchers.IO) {
             if (source == null) return@withContext Result.success(emptyList())
             try {
                 if (isMangaDex(source)) return@withContext searchMangaDex(query.trim(), source)
                 val q = query.trim()
-                val documents = if (q.isBlank()) {
-                    collectDocuments(source.baseUrl.trimEnd('/'), source, 12)
-                } else {
-                    collectSearchDocuments(q, source, 8)
-                }
+                val documents = if (q.isBlank()) collectBrowseDocuments(source, page)
+                else collectSearchDocuments(q, source, 8)
                 val merged = LinkedHashMap<String, MangaItem>()
-                documents.forEach { doc ->
-                    parseSearchDocument(doc, source).forEach { item ->
-                        if (!merged.containsKey(item.id)) merged[item.id] = item
-                    }
+                documents.forEach { doc -> parseSearchDocument(doc, source).forEach { if (merged[it.id] == null) merged[it.id] = it } }
+                var results = merged.values.toList()
+                if (q.isNotBlank() && results.isEmpty()) results = fallbackSearchBySlug(q, source)
+                if (q.isNotBlank() && results.isEmpty()) results = sitemapSearch(q, source)
+                if (results.isEmpty()) {
+                    return@withContext Result.failure(Exception(
+                        "لم يتم العثور على أعمال من " + source.name +
+                            ". إذا كان المصدر يحتاج Cloudflare/CAPTCHA، افتحه بالمتصفح المدمج وأكمل التحقق يدوياً ثم أعد البحث."
+                    ))
                 }
-                if (merged.isNotEmpty()) return@withContext Result.success(merged.values.take(100))
-                Result.failure(Exception(
-                    "لم يتم العثور على أعمال من \${source.name}. إذا كان الموقع يطلب Cloudflare/CAPTCHA، افتحه بالمتصفح المدمج وأكمل التحقق يدوياً ثم أعد البحث."
-                ))
+                Result.success(results.distinctBy { it.id }.take(500))
             } catch (e: Exception) {
-                Result.failure(Exception("تعذر الاتصال بالمصدر \${source.name}: \${e.message}", e))
+                Result.failure(Exception("تعذر الاتصال بالمصدر " + source.name + ": " + e.message, e))
             }
         }
+
 
     suspend fun fetchChapters(
         mangaId: String,
@@ -369,196 +369,181 @@ class ConnectorEngine {
     }
 
     private fun parseSearchDocument(document: Document, source: SourceItem): List<MangaItem> {
+        if (isAzora(source)) return parseAzoraSearchDocument(document, source)
         val selectors = listOf(
-            "div.c-tabs-item__content div.post-title a",
-            ".manga__item .post-title a",
-            ".page-item-detail.manga .post-title a",
-            ".page-item-detail.manga a",
-            ".item-summary .post-title a",
-            "article .post-title a",
-            ".bsx a[href]",
-            ".listupd .bs a[href]",
-            ".row.c-tabs-item__content a",
-            "a[href*='/manga/']",
-            "a[href*='/manhwa/']",
-            "a[href*='/manhua/']",
-            "a[href*='/comic/']",
-            "a[href*='/series/']",
-            "a[href*='/title/']"
+            "div.c-tabs-item__content div.post-title a",".manga__item .post-title a",
+            ".page-item-detail.manga .post-title a",".page-item-detail.manga a[href]",
+            ".item-summary .post-title a","article .post-title a",".bsx a[href]",
+            ".listupd .bs a[href]",".row.c-tabs-item__content a",".series-card a[href]",
+            "a[href*='/manga/']","a[href*='/manhwa/']","a[href*='/manhua/']",
+            "a[href*='/comic/']","a[href*='/series/']","a[href*='/title/']"
         )
-
         val anchors = LinkedHashSet<Element>()
-        for (selector in selectors) anchors.addAll(document.select(selector))
-
+        selectors.forEach { anchors.addAll(document.select(it)) }
         val results = mutableListOf<MangaItem>()
         val seen = HashSet<String>()
-
         for (anchor in anchors) {
             val href = anchor.absUrl("href").ifBlank { anchor.attr("href") }
-            if (!href.startsWith("http") || !sameSite(href, source.baseUrl) || !seen.add(href)) continue
-
-            val container = anchor.closest(
-                ".page-item-detail, .manga__item, .c-tabs-item__content, " +
-                    "article, .bsx, .bs, .list-item, .row.c-tabs-item__content, .item-summary"
-            )
-
+            if (!href.startsWith("http") || !sameSite(href, source.baseUrl) ||
+                href.contains("/chapter-", true) || href.contains("/chapter/", true) || !seen.add(href)) continue
+            val box = anchor.closest(".page-item-detail,.manga__item,.c-tabs-item__content,article,.bsx,.bs,.list-item,.item-summary,li,.series-card")
             val title = firstNonBlank(
-                container?.selectFirst(
-                    ".post-title a, .post-title, .item-summary .post-title, " +
-                        ".tt, .title, .entry-title, h2, h3, h4"
-                )?.text()?.trim(),
-                anchor.attr("title").trim(),
-                anchor.text().trim(),
-                anchor.selectFirst("img")?.attr("alt")?.trim(),
-                container?.selectFirst("img")?.attr("alt")?.trim()
+                box?.selectFirst(".post-title a,.post-title,.tt,.title,.entry-title,h2,h3,h4,[title]")?.text()?.trim(),
+                anchor.attr("title").trim(), anchor.text().trim(),
+                anchor.selectFirst("img")?.attr("alt")?.trim(), box?.selectFirst("img")?.attr("alt")?.trim()
             ) ?: continue
-
-            if (title.length < 2 || looksLikeNavigation(title) ||
-                title.all { it.isDigit() || it == '.' || it == '-' }) continue
-
-            val coverElement = container?.selectFirst("img") ?: anchor.selectFirst("img")
-            val cover = coverElement?.let { imageUrl(it) }.orEmpty()
-            val description = container?.selectFirst(
-                ".summary-content, .post-content, .description, .summary__content, .excerpt"
-            )?.text()?.trim().orEmpty()
-            val author = container?.selectFirst(
-                ".author-content a, .author a, .mg_author a"
-            )?.text()?.trim().orEmpty()
-
-            results.add(
-                MangaItem(
-                    id = genericId(href),
-                    title = title,
-                    coverUrl = cover,
-                    author = author,
-                    description = description,
-                    sourceId = source.id,
-                    sourceName = source.name
-                )
+            if (!isValidMangaTitle(title)) continue
+            val img = box?.selectFirst("img[data-src],img[data-lazy-src],img[data-original],img[src]") ?: anchor.selectFirst("img")
+            results += MangaItem(
+                id = genericId(href), title = title, coverUrl = img?.let { imageUrl(it) }.orEmpty(),
+                author = box?.selectFirst(".author-content a,.author a,.mg_author a")?.text()?.trim().orEmpty(),
+                description = box?.selectFirst(".summary-content,.post-content,.description,.excerpt,p")?.text()?.trim().orEmpty(),
+                sourceId = source.id, sourceName = source.name
             )
-            if (results.size >= 100) break
+            if (results.size >= 500) break
         }
         return results
     }
 
-    private fun collectSearchDocuments(query: String, source: SourceItem, maxPages: Int): List<Document> {
-        val encoded = URLEncoder.encode(query, "UTF-8")
-        val base = source.baseUrl.trimEnd('/')
-        val candidates = listOf(
-            "$base/?s=$encoded",
-            "$base/search/?s=$encoded",
-            "$base/search?q=$encoded",
-            "$base/search/$encoded/",
-            "$base/?post_type=wp-manga&s=$encoded"
-        )
-
-        val documents = mutableListOf<Document>()
-        val visited = LinkedHashSet<String>()
-        var firstUrl: String? = null
-
-        for (candidate in candidates) {
-            val parsed = fetchDocument(candidate) ?: continue
-            if (!isLikelySearchPage(parsed, query, candidate)) continue
-            documents.add(parsed)
-            visited.add(candidate)
-            firstUrl = candidate
-            break
+    private fun parseAzoraSearchDocument(document: Document, source: SourceItem): List<MangaItem> {
+        val out = mutableListOf<MangaItem>(); val seen = HashSet<String>()
+        for (a in document.select("a[title],a[href*='/series/']")) {
+            val href = a.absUrl("href").ifBlank { a.attr("href") }
+            if (!href.startsWith("http") || !sameSite(href,source.baseUrl) || href.contains("/chapter-",true) || !seen.add(href)) continue
+            val title = firstNonBlank(a.attr("title").trim(),a.text().trim(),a.selectFirst("img")?.attr("alt")?.trim(),a.parent()?.selectFirst("h2,h3,h4")?.text()?.trim()) ?: continue
+            if (!isValidMangaTitle(title)) continue
+            val box=a.closest("article,li,div"); val img=box?.selectFirst("img") ?: a.selectFirst("img")
+            out += MangaItem(id=genericId(href),title=title,coverUrl=img?.let{imageUrl(it)}.orEmpty(),sourceId=source.id,sourceName=source.name)
+            if(out.size>=500) break
         }
+        return out
+    }
 
-        if (firstUrl == null) return emptyList()
+    private fun isValidMangaTitle(title:String):Boolean {
+        val t=title.trim()
+        if(t.length<2 || looksLikeNavigation(t)) return false
+        if(t.all{it.isDigit()||it=='.'||it=='-'||it=='_'}) return false
+        return !t.lowercase(Locale.ROOT).startsWith("chapter ")
+    }
 
-        val queue = ArrayDeque<String>()
-        queue.addAll(discoverPaginationUrls(documents.first(), firstUrl, source))
-        var pageCount = 1
-
-        while (queue.isNotEmpty() && pageCount < maxPages) {
-            val url = queue.removeFirst()
-            if (!visited.add(url)) continue
-            val parsed = fetchDocument(url) ?: continue
-            documents.add(parsed)
-            pageCount++
-            queue.addAll(discoverPaginationUrls(parsed, url, source).filter { !visited.contains(it) })
+    private fun collectSearchDocuments(query:String,source:SourceItem,maxPages:Int):List<Document>{
+        val encoded=URLEncoder.encode(query,"UTF-8"); val base=source.baseUrl.trimEnd('/')
+        val candidates=if(isAzora(source))
+            listOf("$base/series/?searchTerm=$encoded","$base/series/?search=$encoded")
+        else listOf("$base/?s=$encoded","$base/search/?s=$encoded","$base/search?q=$encoded","$base/search/$encoded/","$base/?post_type=wp-manga&s=$encoded","$base/manga/?s=$encoded")
+        val docs=mutableListOf<Document>(); val visited=LinkedHashSet<String>(); var first:String?=null
+        for(u in candidates){
+            val d=fetchDocument(u) ?: continue
+            if(!isLikelySearchPage(d,query,u)) continue
+            docs+=d; visited+=u; first=u; break
         }
-
-        for (page in 2..maxPages) {
-            if (pageCount >= maxPages) break
-            val generated = listOf(
-                "$base/page/$page/?s=$encoded",
-                "$base/?s=$encoded&paged=$page",
-                "$base/?s=$encoded&page=$page"
-            )
-            for (url in generated) {
-                if (!visited.add(url)) continue
-                val parsed = fetchDocument(url) ?: continue
-                if (!isLikelySearchPage(parsed, query, url)) continue
-                documents.add(parsed)
-                pageCount++
-                if (pageCount >= maxPages) break
+        if(first==null) return emptyList()
+        val queue=ArrayDeque<String>(); queue.addAll(discoverPaginationUrls(docs.first(),first,source)); var count=1
+        while(queue.isNotEmpty()&&count<maxPages){
+            val u=queue.removeFirst(); if(!visited.add(u)) continue
+            val d=fetchDocument(u) ?: continue
+            if(!isLikelySearchPage(d,query,u)) continue
+            docs+=d; count++; queue.addAll(discoverPaginationUrls(d,u,source).filter{!visited.contains(it)})
+        }
+        for(page in 2..maxPages){
+            if(count>=maxPages) break
+            val generated=if(isAzora(source))
+                listOf("$base/series/?searchTerm=$encoded&page=$page","$base/series/?searchTerm=$encoded&paged=$page")
+            else listOf("$base/page/$page/?s=$encoded","$base/?s=$encoded&paged=$page","$base/?s=$encoded&page=$page","$base/manga/page/$page/?s=$encoded")
+            for(u in generated){
+                if(!visited.add(u)) continue
+                val d=fetchDocument(u) ?: continue
+                if(!isLikelySearchPage(d,query,u)) continue
+                docs+=d; count++; if(count>=maxPages) break
             }
         }
-        return documents
+        return docs
     }
 
-    private fun collectDocuments(startUrl: String, source: SourceItem?, maxPages: Int): List<Document> {
-        val first = fetchDocument(startUrl) ?: return emptyList()
-        val documents = mutableListOf(first)
-        val visited = LinkedHashSet<String>()
-        visited.add(startUrl)
-        val queue = ArrayDeque<String>()
-        queue.addAll(discoverPaginationUrls(first, startUrl, source))
-        var count = 1
+    private fun collectBrowseDocuments(source:SourceItem,page:Int):List<Document>{
+        val base=source.baseUrl.trimEnd('/')
+        val urls=if(isAzora(source)) listOf("$base/series/", "$base/series/?page=$page")
+        else if(page<=1) listOf("$base/manga/","$base/?post_type=wp-manga",base)
+        else listOf("$base/manga/page/$page/","$base/page/$page/","$base/?paged=$page","$base/?page=$page","$base/?start="+((page-1)*10))
+        for(u in urls){ fetchDocument(u)?.let{return listOf(it)} }
+        return emptyList()
+    }
 
-        while (queue.isNotEmpty() && count < maxPages) {
-            val url = queue.removeFirst()
-            if (!visited.add(url)) continue
-            val parsed = fetchDocument(url) ?: continue
-            documents.add(parsed)
-            count++
-            queue.addAll(discoverPaginationUrls(parsed, url, source).filter { !visited.contains(it) })
+    private fun collectDocuments(startUrl:String,source:SourceItem?,maxPages:Int):List<Document>{
+        val first=fetchDocument(startUrl)?:return emptyList()
+        val docs=mutableListOf(first); val seen=LinkedHashSet<String>(); seen+=startUrl
+        val q=ArrayDeque<String>(); q.addAll(discoverPaginationUrls(first,startUrl,source)); var count=1
+        while(q.isNotEmpty()&&count<maxPages){
+            val u=q.removeFirst(); if(!seen.add(u)) continue
+            val d=fetchDocument(u)?:continue; docs+=d; count++
+            q.addAll(discoverPaginationUrls(d,u,source).filter{!seen.contains(it)})
         }
-        return documents
+        return docs
     }
 
-    private fun fetchDocument(url: String): Document? {
-        return try {
-            val response = execute(url)
-            val body = response.body?.string().orEmpty()
-            val ok = response.isSuccessful && body.isNotBlank() && !looksLikeHumanVerification(body)
-            response.close()
-            if (!ok) null else Jsoup.parse(body, url)
-        } catch (_: Exception) {
-            null
+    private fun fetchDocument(url:String):Document?{
+        return try{
+            val response=execute(url); val body=response.body?.string().orEmpty()
+            val ok=response.isSuccessful&&body.isNotBlank()&&!looksLikeHumanVerification(body)
+            response.close(); if(ok) Jsoup.parse(body,url) else null
+        }catch(_:Exception){null}
+    }
+
+    private fun isLikelySearchPage(document:Document,query:String,url:String):Boolean{
+        if(isAzoraUrl(url)){
+            val q=query.lowercase(Locale.ROOT)
+            return document.text().lowercase(Locale.ROOT).contains(q)&&document.select("a[href*='/series/']").isNotEmpty()
         }
+        val q=query.lowercase(Locale.ROOT).trim()
+        val title=document.title().lowercase(Locale.ROOT)
+        val heading=document.select("h1,h2,.c-tabs-head__title,.search-title").text().lowercase(Locale.ROOT)
+        val cards=document.select(".page-item-detail,.manga__item,.bsx,.listupd .bs,article,a[href*='/manga/'],a[href*='/series/']").size>=2
+        if((title.contains("search")||title.contains("بحث")||title.contains("نتائج")||heading.contains("search")||heading.contains("بحث")||heading.contains("نتائج"))&&cards) return true
+        if(q.isNotBlank()) return document.select("h2,h3,h4,.post-title,.tt,.title,a[title]").any{it.text().trim().lowercase(Locale.ROOT).contains(q)}
+        return false
     }
 
-    private fun isLikelySearchPage(document: Document, query: String, url: String): Boolean {
-        val q = query.lowercase(Locale.ROOT).trim()
-        val title = document.title().lowercase(Locale.ROOT)
-        val heading = document.select("h1, h2, .c-tabs-head__title, .search-title").text().lowercase(Locale.ROOT)
-        if (title.contains("search") || title.contains("بحث") ||
-            heading.contains("search") || heading.contains("بحث")) return true
-        return q.isNotBlank() && document.text().lowercase(Locale.ROOT).contains(q)
-    }
-
-    private fun discoverPaginationUrls(document: Document, currentUrl: String, source: SourceItem?): List<String> {
-        val result = LinkedHashSet<String>()
-        val base = source?.baseUrl ?: currentUrl
-        for (a in document.select("a[href]")) {
-            val href = a.absUrl("href").ifBlank { a.attr("href") }
-            if (!href.startsWith("http") || !sameSite(href, base)) continue
-            val text = (
-                a.text() + " " + a.attr("rel") + " " + a.attr("aria-label") + " " + a.className()
-            ).lowercase(Locale.ROOT)
-            val looksPage = text.contains("next") || text.contains("التالي") ||
-                text.contains("page") || text.contains("صفحة") ||
-                Regex("/page/\\d+/?").containsMatchIn(href) ||
-                Regex("[?&](?:paged|page|start)=\\d+").containsMatchIn(href)
-            if (looksPage) result.add(href)
+    private fun discoverPaginationUrls(document:Document,currentUrl:String,source:SourceItem?):List<String>{
+        val result=LinkedHashSet<String>(); val base=source?.baseUrl?:currentUrl
+        for(a in document.select("a[href]")){
+            val href=a.absUrl("href").ifBlank{a.attr("href")}
+            if(!href.startsWith("http")||!sameSite(href,base)) continue
+            val text=(a.text()+" "+a.attr("rel")+" "+a.attr("aria-label")+" "+a.className()).lowercase(Locale.ROOT)
+            val looks=a.attr("rel").equals("next",true)||text.contains("next")||text.contains("التالي")||text.contains("page")||text.contains("صفحة")||
+                Regex("""/page/d+/?""").containsMatchIn(href)||Regex("""[?&](?:paged|page|start)=d+""").containsMatchIn(href)
+            if(looks) result+=href
         }
         return result.toList()
     }
 
-    private fun execute(
+    private fun fallbackSearchBySlug(query:String,source:SourceItem):List<MangaItem>{
+        val slug=query.trim().lowercase(Locale.ROOT).replace(Regex("[^a-z0-9\u0600-\u06ff]+"),"-").trim('-')
+        if(slug.isBlank()) return emptyList()
+        val base=source.baseUrl.trimEnd('/')
+        val urls=listOf("$base/manga/$slug/","$base/manhwa/$slug/","$base/manhua/$slug/","$base/comic/$slug/","$base/series/$slug/","$base/title/$slug")
+        return urls.mapNotNull{u->fetchDocument(u)?.let{parseSearchDocument(it,source).firstOrNull()}}
+    }
+
+    private fun sitemapSearch(query:String,source:SourceItem):List<MangaItem>{
+        val tokens=query.lowercase(Locale.ROOT).split(Regex("\s+")).filter{it.length>=2}
+        if(tokens.isEmpty()) return emptyList()
+        val base=source.baseUrl.trimEnd('/')
+        for(u in listOf("$base/sitemap_index.xml","$base/wp-sitemap.xml","$base/sitemap.xml")){
+            try{
+                val r=execute(u); val body=r.body?.string().orEmpty(); r.close(); if(body.isBlank()) continue
+                val xml=Jsoup.parse(body,"",org.jsoup.parser.Parser.xmlParser())
+                val links=xml.select("loc").map{it.text()}.filter{link->val l=link.lowercase(Locale.ROOT);tokens.all{t->l.contains(t)}}.take(40)
+                val out=links.mapNotNull{link->fetchDocument(link)?.let{parseSearchDocument(it,source).firstOrNull()}}
+                if(out.isNotEmpty()) return out
+            }catch(_:Exception){}
+        }
+        return emptyList()
+    }
+
+    private fun isAzora(source:SourceItem?):Boolean=source?.baseUrl?.contains("azorafly.com",true)==true
+    private fun isAzoraUrl(url:String):Boolean=url.contains("azorafly.com/series/",true)
+
+
     private fun execute(url: String) = client.newCall(buildRequest(url)).execute()
 
     private fun buildRequest(url: String): Request {

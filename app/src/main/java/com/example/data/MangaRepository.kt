@@ -27,7 +27,7 @@ import java.util.UUID
 
 class MangaRepository(private val context: Context) {
 
-    val connector = ConnectorEngine()
+    val connector = ConnectorEngine(context)
     private val scope = CoroutineScope(Dispatchers.IO)
 
     private val prefs: SharedPreferences =

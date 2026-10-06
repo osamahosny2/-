@@ -18,6 +18,7 @@ import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.grid.GridCells
 import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
 import androidx.compose.foundation.lazy.grid.items
+import androidx.compose.foundation.lazy.grid.GridItemSpan
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -77,6 +78,7 @@ fun BrowseScreen(
     val isSearching by viewModel.isSearching.collectAsState()
     val searchError by viewModel.searchError.collectAsState()
     val isSearchingAllSources by viewModel.isSearchingAllSources.collectAsState()
+    val isLoadingMore by viewModel.isLoadingMore.collectAsState()
     val selectedSource by viewModel.selectedSource.collectAsState()
     val sources by viewModel.sources.collectAsState()
 
@@ -411,6 +413,22 @@ fun BrowseScreen(
                         manga = manga,
                         onClick = { viewModel.openMangaDetails(manga) }
                     )
+                }
+                item(span = { GridItemSpan(maxLineSpan) }) {
+                    OutlinedButton(
+                        onClick = { viewModel.loadMoreSourceResults() },
+                        enabled = !isLoadingMore && searchQuery.isBlank() && selectedSource != null,
+                        modifier = Modifier.fillMaxWidth().padding(vertical = 10.dp),
+                        shape = RoundedCornerShape(12.dp)
+                    ) {
+                        if (isLoadingMore) {
+                            CircularProgressIndicator(modifier = Modifier.size(18.dp), strokeWidth = 2.dp)
+                            Spacer(modifier = Modifier.width(8.dp))
+                            Text("جارٍ تحميل المزيد...")
+                        } else {
+                            Text("تحميل المزيد من " + (selectedSource?.name ?: "المصدر"))
+                        }
+                    }
                 }
             }
         }

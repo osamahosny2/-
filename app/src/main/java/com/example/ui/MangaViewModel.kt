@@ -73,6 +73,9 @@ class MangaViewModel(application: Application) : AndroidViewModel(application) {
     val searchError: StateFlow<String?> = _searchError.asStateFlow()
     private val _isSearchingAllSources = MutableStateFlow(false)
     val isSearchingAllSources: StateFlow<Boolean> = _isSearchingAllSources.asStateFlow()
+    private val _browsePage = MutableStateFlow(1)
+    private val _isLoadingMore = MutableStateFlow(false)
+    val isLoadingMore: StateFlow<Boolean> = _isLoadingMore.asStateFlow()
 
     // 3. Selected Manga Details & Chapters
     private val _selectedManga = MutableStateFlow<MangaItem?>(null)
@@ -191,6 +194,7 @@ class MangaViewModel(application: Application) : AndroidViewModel(application) {
 
     fun setSource(source: SourceItem?) {
         _selectedSource.value = source
+        _browsePage.value = 1
         if (source != null) {
             performSearch(_searchQuery.value)
         } else {
@@ -200,10 +204,35 @@ class MangaViewModel(application: Application) : AndroidViewModel(application) {
 
     fun setSearchQuery(query: String) {
         _searchQuery.value = query
+        _browsePage.value = 1
         performSearch(query)
     }
 
+    fun loadMoreSourceResults() {
+        val src = _selectedSource.value ?: return
+        if (_searchQuery.value.isNotBlank() || _isSearching.value || _isLoadingMore.value) return
+        val nextPage = _browsePage.value + 1
+        viewModelScope.launch {
+            _isLoadingMore.value = true
+            val result = repository.connector.searchManga("", src, nextPage)
+            if (result.isSuccess) {
+                val incoming = result.getOrDefault(emptyList())
+                if (incoming.isNotEmpty()) {
+                    _searchResults.value = (_searchResults.value + incoming).distinctBy { it.id }
+                    _browsePage.value = nextPage
+                    _searchError.value = null
+                } else {
+                    _searchError.value = "لا توجد أعمال إضافية في هذه الصفحة."
+                }
+            } else {
+                _searchError.value = result.exceptionOrNull()?.message ?: "تعذر تحميل المزيد من الأعمال."
+            }
+            _isLoadingMore.value = false
+        }
+    }
+
     fun performSearch(query: String) {
+        _browsePage.value = 1
         val src = _selectedSource.value
         if (src == null) {
             _searchResults.value = emptyList()
