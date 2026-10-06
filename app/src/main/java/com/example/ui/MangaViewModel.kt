@@ -71,6 +71,8 @@ class MangaViewModel(application: Application) : AndroidViewModel(application) {
 
     private val _searchError = MutableStateFlow<String?>(null)
     val searchError: StateFlow<String?> = _searchError.asStateFlow()
+    private val _isSearchingAllSources = MutableStateFlow(false)
+    val isSearchingAllSources: StateFlow<Boolean> = _isSearchingAllSources.asStateFlow()
 
     // 3. Selected Manga Details & Chapters
     private val _selectedManga = MutableStateFlow<MangaItem?>(null)
@@ -218,6 +220,46 @@ class MangaViewModel(application: Application) : AndroidViewModel(application) {
                 _searchError.value = result.exceptionOrNull()?.message ?: "حدث خطأ أثناء البحث"
             }
             _isSearching.value = false
+        }
+    }
+
+    fun performSearchAllSources(query: String) {
+        val q = query.trim()
+        if (q.isBlank()) {
+            _searchResults.value = emptyList()
+            _searchError.value = "اكتب اسم المانجا أو المانهوا أولاً."
+            return
+        }
+        val srcs = sources.value
+        if (srcs.isEmpty()) {
+            _searchResults.value = emptyList()
+            _searchError.value = "لا توجد مصادر مضافة."
+            return
+        }
+        viewModelScope.launch {
+            _isSearching.value = true
+            _isSearchingAllSources.value = true
+            _searchError.value = null
+            try {
+                val results = srcs.map { src ->
+                    async {
+                        withTimeoutOrNull(15_000L) {
+                            repository.connector.searchManga(q, src).getOrElse { emptyList() }
+                        } ?: emptyList()
+                    }
+                }.awaitAll().flatten()
+
+                _searchResults.value = results
+                    .distinctBy { it.id }
+                    .sortedWith(compareBy<MangaItem> { it.sourceName.lowercase() }.thenBy { it.title.lowercase() })
+
+                if (_searchResults.value.isEmpty()) {
+                    _searchError.value = "لم يتم العثور على العمل في المصادر التي استجابت للبحث."
+                }
+            } finally {
+                _isSearching.value = false
+                _isSearchingAllSources.value = false
+            }
         }
     }
 

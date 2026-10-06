@@ -76,6 +76,7 @@ fun BrowseScreen(
     val searchQuery by viewModel.searchQuery.collectAsState()
     val isSearching by viewModel.isSearching.collectAsState()
     val searchError by viewModel.searchError.collectAsState()
+    val isSearchingAllSources by viewModel.isSearchingAllSources.collectAsState()
     val selectedSource by viewModel.selectedSource.collectAsState()
     val sources by viewModel.sources.collectAsState()
 
@@ -293,6 +294,26 @@ fun BrowseScreen(
                 unfocusedTextColor = Color.White
             )
         )
+
+        Spacer(modifier = Modifier.height(8.dp))
+
+        OutlinedButton(
+            onClick = { viewModel.performSearchAllSources(searchQuery) },
+            enabled = searchQuery.isNotBlank() && !isSearching,
+            modifier = Modifier.fillMaxWidth(),
+            shape = RoundedCornerShape(12.dp)
+        ) {
+            Icon(
+                imageVector = Icons.Default.TravelExplore,
+                contentDescription = null,
+                modifier = Modifier.size(18.dp)
+            )
+            Spacer(modifier = Modifier.width(6.dp))
+            Text(
+                text = if (isSearchingAllSources) "جارٍ البحث في جميع المصادر..." else "البحث في جميع المصادر",
+                fontWeight = FontWeight.Bold
+            )
+        }
 
         Spacer(modifier = Modifier.height(12.dp))
 
