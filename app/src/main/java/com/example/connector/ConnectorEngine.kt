@@ -524,7 +524,7 @@ class ConnectorEngine {
     }
 
     private fun sitemapSearch(query:String,source:SourceItem):List<MangaItem>{
-        val tokens=query.lowercase(Locale.ROOT).split(Regex("\s+")).filter{it.length>=2}
+        val tokens=query.lowercase(Locale.ROOT).split(Regex("\\s+")).filter{it.length>=2}
         if(tokens.isEmpty()) return emptyList()
         val base=source.baseUrl.trimEnd('/')
         for(u in listOf("$base/sitemap_index.xml","$base/wp-sitemap.xml","$base/sitemap.xml")){
