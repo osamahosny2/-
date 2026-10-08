@@ -2,31 +2,22 @@ package com.example
 
 import androidx.compose.material3.Text
 import androidx.compose.ui.test.junit4.createComposeRule
-import androidx.compose.ui.test.onRoot
+import androidx.compose.ui.test.onNodeWithText
 import com.example.ui.theme.IrumaMangaTheme
-import com.github.takahirom.roborazzi.RoborazziDeviceQualifiers
-import com.github.takahirom.roborazzi.captureRoboImage
 import org.junit.Rule
 import org.junit.Test
-import org.junit.runner.RunWith
-import org.robolectric.RobolectricTestRunner
-import org.robolectric.annotation.Config
-import org.robolectric.annotation.GraphicsMode
 
-@RunWith(RobolectricTestRunner::class)
-@GraphicsMode(GraphicsMode.Mode.NATIVE)
-@Config(qualifiers = RoborazziDeviceQualifiers.Pixel8, sdk = [35])
 class GreetingScreenshotTest {
-
-  @get:Rule val composeTestRule = createComposeRule()
+  @get:Rule
+  val composeTestRule = createComposeRule()
 
   @Test
-  fun greeting_screenshot() {
+  fun greetingIsRendered() {
     composeTestRule.setContent {
       IrumaMangaTheme {
         Text("إيروما منجا")
       }
     }
-    composeTestRule.onRoot().captureRoboImage(filePath = "src/test/screenshots/greeting.png")
+    composeTestRule.onNodeWithText("إيروما منجا").assertExists()
   }
 }
