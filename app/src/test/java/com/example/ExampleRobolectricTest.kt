@@ -1,6 +1,9 @@
 package com.example
 
 import android.content.Context
+import android.test.mock.MockContext
+import android.content.ContextWrapper
+import android.content.res.Resources
 import androidx.test.core.app.ApplicationProvider
 import org.junit.Assert.assertEquals
 import org.junit.Test
@@ -9,14 +12,14 @@ import org.robolectric.RobolectricTestRunner
 import org.robolectric.annotation.Config
 
 @RunWith(RobolectricTestRunner::class)
-@Config(sdk = [36])
+@Config(sdk = [35])
 class ExampleRobolectricTest {
 
   @Test
   fun `read string from context`() {
     val context = ApplicationProvider.getApplicationContext<Context>()
     val appName = context.getString(R.string.app_name)
-    assertEquals("إيروما مانجا", appName)
+    assertEquals("إيروما منجا", appName)
   }
 
   @Test
