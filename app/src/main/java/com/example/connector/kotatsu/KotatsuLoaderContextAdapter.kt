@@ -2,7 +2,7 @@ package com.example.connector.kotatsu
 
 import android.graphics.BitmapFactory
 import android.graphics.Canvas
-import android.graphics.Rect
+import android.graphics.Rect as AndroidRect
 import android.webkit.CookieManager
 import okhttp3.Cookie
 import okhttp3.CookieJar
@@ -13,6 +13,7 @@ import okhttp3.ResponseBody.Companion.toResponseBody
 import org.koitharu.kotatsu.parsers.MangaLoaderContext
 import org.koitharu.kotatsu.parsers.MangaParser
 import org.koitharu.kotatsu.parsers.bitmap.Bitmap as KotatsuBitmap
+import org.koitharu.kotatsu.parsers.bitmap.Rect as KotatsuRect
 import org.koitharu.kotatsu.parsers.config.ConfigKey
 import org.koitharu.kotatsu.parsers.config.MangaSourceConfig
 import org.koitharu.kotatsu.parsers.model.MangaSource
@@ -50,9 +51,12 @@ class AndroidCookieJar : CookieJar {
 private class AndroidKotatsuBitmap(val bitmap: android.graphics.Bitmap) : KotatsuBitmap {
     override val width: Int get() = bitmap.width
     override val height: Int get() = bitmap.height
-    override fun drawBitmap(sourceBitmap: KotatsuBitmap, src: Rect, dst: Rect) {
+
+    override fun drawBitmap(sourceBitmap: KotatsuBitmap, src: KotatsuRect, dst: KotatsuRect) {
         val source = (sourceBitmap as? AndroidKotatsuBitmap)?.bitmap ?: return
-        Canvas(bitmap).drawBitmap(source, src, dst, null)
+        val sourceRect = AndroidRect(src.left, src.top, src.right, src.bottom)
+        val destRect = AndroidRect(dst.left, dst.top, dst.right, dst.bottom)
+        Canvas(bitmap).drawBitmap(source, sourceRect, destRect, null)
     }
 }
 
