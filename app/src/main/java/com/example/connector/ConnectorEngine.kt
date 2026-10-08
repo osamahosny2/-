@@ -1,5 +1,7 @@
 package com.example.connector
 
+import com.example.connector.kotatsu.KotatsuSourceEngine
+
 import android.util.Base64
 import android.webkit.CookieManager
 import com.example.model.MangaChapter
@@ -21,6 +23,7 @@ import java.util.concurrent.TimeUnit
 
 class ConnectorEngine {
 
+    private val kotatsuEngine = KotatsuSourceEngine()
     private val starzConnector = StarzConnector()
 
     private val client = OkHttpClient.Builder()
@@ -39,6 +42,9 @@ class ConnectorEngine {
             try {
                 if (StarzConnector.isStarz(source)) {
                     return@withContext starzConnector.searchManga(query.trim(), source, page)
+                }
+                kotatsuEngine.searchManga(query.trim(), source, page)?.let {
+                    return@withContext it
                 }
                 if (isMangaDex(source)) return@withContext searchMangaDex(query.trim(), source)
                 val q = query.trim()
@@ -62,6 +68,15 @@ class ConnectorEngine {
         }
 
 
+    suspend fun fetchMangaDetails(
+        manga: MangaItem,
+        source: SourceItem?
+    ): Result<MangaItem> = withContext(Dispatchers.IO) {
+        if (source == null) return@withContext Result.failure(Exception("Source is missing"))
+        kotatsuEngine.fetchDetails(manga, source)?.let { return@withContext it }
+        Result.success(manga.copy(status = if (manga.status.isBlank()) "UNKNOWN" else manga.status))
+    }
+
     suspend fun fetchChapters(
         mangaId: String,
         source: SourceItem? = null
@@ -69,6 +84,12 @@ class ConnectorEngine {
         try {
             if (StarzConnector.isStarz(source)) {
                 return@withContext starzConnector.fetchChapters(mangaId, source!!)
+            }
+            kotatsuEngine.fetchChapters(
+                mangaId,
+                source ?: return@withContext Result.failure(Exception("Source is missing"))
+            )?.let {
+                return@withContext it
             }
             if (isMangaDex(source) || !mangaId.startsWith("generic:")) {
                 return@withContext fetchMangaDexChapters(mangaId)
@@ -122,6 +143,12 @@ class ConnectorEngine {
         try {
             if (StarzConnector.isStarz(source)) {
                 return@withContext starzConnector.fetchChapterPages(chapterId, source!!)
+            }
+            kotatsuEngine.fetchPages(
+                chapterId,
+                source ?: return@withContext Result.failure(Exception("Source is missing"))
+            )?.let {
+                return@withContext it
             }
             if (isMangaDex(source) || !chapterId.startsWith("generic-chapter:")) {
                 return@withContext fetchMangaDexPages(chapterId)

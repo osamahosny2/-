@@ -76,6 +76,7 @@ secrets {
 // Some unused dependencies are commented out below instead of being removed.
 // This makes it easy to add them back in the future if needed.
 dependencies {
+    implementation("com.github.Kotatsu-Redo:kotatsu-parsers-redo:b3c000024563920d3eecde5816f2e9d3734fa467")
   implementation(platform(libs.androidx.compose.bom))
   // implementation(platform(libs.firebase.bom))
   // implementation(libs.accompanist.permissions)

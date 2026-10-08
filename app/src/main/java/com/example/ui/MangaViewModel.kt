@@ -213,11 +213,11 @@ class MangaViewModel(application: Application) : AndroidViewModel(application) {
 
     fun loadMoreSourceResults() {
         val src = _selectedSource.value ?: return
-        if (_searchQuery.value.isNotBlank() || _isSearching.value || _isLoadingMore.value) return
+        if (_isSearching.value || _isLoadingMore.value) return
         val nextPage = _browsePage.value + 1
         viewModelScope.launch {
             _isLoadingMore.value = true
-            val result = repository.connector.searchManga("", src, nextPage)
+            val result = repository.connector.searchManga(_searchQuery.value, src, nextPage)
             if (result.isSuccess) {
                 val incoming = result.getOrDefault(emptyList())
                 if (incoming.isNotEmpty()) {
@@ -331,13 +331,22 @@ class MangaViewModel(application: Application) : AndroidViewModel(application) {
     private fun loadChaptersForManga(mangaId: String) {
         viewModelScope.launch {
             _isLoadingChapters.value = true
-            val source = sources.value.firstOrNull { it.id == (_selectedManga.value?.sourceId ?: "") }
-            val result = repository.connector.fetchChapters(mangaId, source)
+            val current = _selectedManga.value
+            val source = sources.value.firstOrNull { it.id == (current?.sourceId ?: "") }
+
+            val details = current?.let { repository.connector.fetchMangaDetails(it, source) }
+            if (details?.isSuccess == true) {
+                _selectedManga.value = details.getOrThrow()
+            }
+
+            val target = _selectedManga.value ?: current
+            val targetId = target?.id ?: mangaId
+            val result = repository.connector.fetchChapters(targetId, source)
             if (result.isSuccess) {
                 val chapters = result.getOrDefault(emptyList())
                 // Enrich with download and read states
                 val enriched = chapters.map { chap ->
-                    val isDownloaded = repository.isChapterDownloaded(mangaId, chap.id)
+                    val isDownloaded = repository.isChapterDownloaded(targetId, chap.id)
                     val progress = repository.getChapterProgress(chap.id)
                     chap.copy(
                         isDownloaded = isDownloaded,
@@ -346,6 +355,9 @@ class MangaViewModel(application: Application) : AndroidViewModel(application) {
                     )
                 }
                 _mangaChapters.value = enriched
+                _selectedManga.value?.let { currentManga ->
+                    _selectedManga.value = currentManga.copy(totalChaptersCount = enriched.size)
+                }
             } else {
                 _mangaChapters.value = emptyList()
             }
