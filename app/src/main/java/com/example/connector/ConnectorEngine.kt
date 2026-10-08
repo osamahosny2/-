@@ -21,6 +21,8 @@ import java.util.concurrent.TimeUnit
 
 class ConnectorEngine {
 
+    private val starzConnector = StarzConnector()
+
     private val client = OkHttpClient.Builder()
         .connectTimeout(25, TimeUnit.SECONDS)
         .readTimeout(35, TimeUnit.SECONDS)
@@ -35,6 +37,9 @@ class ConnectorEngine {
         withContext(Dispatchers.IO) {
             if (source == null) return@withContext Result.success(emptyList())
             try {
+                if (StarzConnector.isStarz(source)) {
+                    return@withContext starzConnector.searchManga(query.trim(), source, page)
+                }
                 if (isMangaDex(source)) return@withContext searchMangaDex(query.trim(), source)
                 val q = query.trim()
                 val documents = if (q.isBlank()) collectBrowseDocuments(source, page)
@@ -62,6 +67,9 @@ class ConnectorEngine {
         source: SourceItem? = null
     ): Result<List<MangaChapter>> = withContext(Dispatchers.IO) {
         try {
+            if (StarzConnector.isStarz(source)) {
+                return@withContext starzConnector.fetchChapters(mangaId, source!!)
+            }
             if (isMangaDex(source) || !mangaId.startsWith("generic:")) {
                 return@withContext fetchMangaDexChapters(mangaId)
             }
@@ -112,6 +120,9 @@ class ConnectorEngine {
         source: SourceItem? = null
     ): Result<List<MangaPage>> = withContext(Dispatchers.IO) {
         try {
+            if (StarzConnector.isStarz(source)) {
+                return@withContext starzConnector.fetchChapterPages(chapterId, source!!)
+            }
             if (isMangaDex(source) || !chapterId.startsWith("generic-chapter:")) {
                 return@withContext fetchMangaDexPages(chapterId)
             }
@@ -178,7 +189,12 @@ class ConnectorEngine {
     suspend fun downloadImageBytes(imageUrl: String): Result<ByteArray> =
         withContext(Dispatchers.IO) {
             try {
-                val response = client.newCall(buildRequest(imageUrl)).execute()
+                val request = if (StarzConnector.isStarzImageUrl(imageUrl)) {
+                    Request.Builder().url(imageUrl).apply {
+                        StarzConnector.imageHeaders().forEach { (name, value) -> header(name, value) }
+                    }.build()
+                } else buildRequest(imageUrl)
+                val response = client.newCall(request).execute()
                 if (!response.isSuccessful) {
                     return@withContext Result.failure(
                         Exception("فشل تنزيل الصورة: رمز " + response.code)

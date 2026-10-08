@@ -1,5 +1,7 @@
 package com.example.ui.screens
 
+import com.example.connector.StarzConnector
+
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
@@ -181,6 +183,13 @@ fun MangaDetailsScreen(
                                 AsyncImage(
                                     model = ImageRequest.Builder(context)
                                         .data(manga.coverUrl)
+                                        .apply {
+                                            if (StarzConnector.isStarzImageUrl(manga.coverUrl)) {
+                                                StarzConnector.imageHeaders().forEach { (name, value) ->
+                                                    addHeader(name, value)
+                                                }
+                                            }
+                                        }
                                         .crossfade(true)
                                         .build(),
                                     contentDescription = manga.title,
