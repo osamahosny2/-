@@ -239,7 +239,7 @@ class StarzConnector {
         ).orEmpty().trim()
         if (srcset.isNotBlank()) {
             val candidates = srcset.split(",").mapNotNull { entry ->
-                val parts = entry.trim().split(Regex("\s+"))
+                val parts = entry.trim().split(' ').filter { it.isNotBlank() }
                 val url = parts.firstOrNull()?.takeIf { it.isNotBlank() } ?: return@mapNotNull null
                 val quality = parts.getOrNull(1)?.filter { it.isDigit() }?.toIntOrNull() ?: 0
                 url to quality
