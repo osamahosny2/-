@@ -27,8 +27,9 @@ class ConnectorEngine {
     private val starzConnector = StarzConnector()
 
     private val client = OkHttpClient.Builder()
-        .connectTimeout(25, TimeUnit.SECONDS)
-        .readTimeout(35, TimeUnit.SECONDS)
+        .connectTimeout(6, TimeUnit.SECONDS)
+        .readTimeout(8, TimeUnit.SECONDS)
+        .callTimeout(10, TimeUnit.SECONDS)
         .followRedirects(true)
         .build()
 
@@ -49,12 +50,11 @@ class ConnectorEngine {
                 if (isMangaDex(source)) return@withContext searchMangaDex(query.trim(), source)
                 val q = query.trim()
                 val documents = if (q.isBlank()) collectBrowseDocuments(source, page)
-                else collectSearchDocuments(q, source, 8)
+                else collectSearchDocuments(q, source, page)
                 val merged = LinkedHashMap<String, MangaItem>()
                 documents.forEach { doc -> parseSearchDocument(doc, source).forEach { if (merged[it.id] == null) merged[it.id] = it } }
                 var results = merged.values.toList()
                 if (q.isNotBlank() && results.isEmpty()) results = fallbackSearchBySlug(q, source)
-                if (q.isNotBlank() && results.isEmpty()) results = sitemapSearch(q, source)
                 if (results.isEmpty()) {
                     return@withContext Result.failure(Exception(
                         "لم يتم العثور على أعمال من " + source.name +
@@ -332,7 +332,8 @@ class ConnectorEngine {
                     description = description,
                     genres = genres.take(6),
                     sourceId = source.id,
-                    sourceName = source.name
+                    sourceName = source.name,
+                    sourceBaseUrl = source.baseUrl
                 )
             )
         }
@@ -440,7 +441,7 @@ class ConnectorEngine {
                 id = genericId(href), title = title, coverUrl = img?.let { imageUrl(it) }.orEmpty(),
                 author = box?.selectFirst(".author-content a,.author a,.mg_author a")?.text()?.trim().orEmpty(),
                 description = box?.selectFirst(".summary-content,.post-content,.description,.excerpt,p")?.text()?.trim().orEmpty(),
-                sourceId = source.id, sourceName = source.name
+                sourceId = source.id, sourceName = source.name, sourceBaseUrl = source.baseUrl
             )
             if (results.size >= 500) break
         }
@@ -455,7 +456,7 @@ class ConnectorEngine {
             val title = firstNonBlank(a.attr("title").trim(),a.text().trim(),a.selectFirst("img")?.attr("alt")?.trim(),a.parent()?.selectFirst("h2,h3,h4")?.text()?.trim()) ?: continue
             if (!isValidMangaTitle(title)) continue
             val box=a.closest("article,li,div"); val img=box?.selectFirst("img") ?: a.selectFirst("img")
-            out += MangaItem(id=genericId(href),title=title,coverUrl=img?.let{imageUrl(it)}.orEmpty(),sourceId=source.id,sourceName=source.name)
+            out += MangaItem(id=genericId(href),title=title,coverUrl=img?.let{imageUrl(it)}.orEmpty(),sourceId=source.id,sourceName=source.name,sourceBaseUrl=source.baseUrl)
             if(out.size>=500) break
         }
         return out
@@ -468,38 +469,40 @@ class ConnectorEngine {
         return !t.lowercase(Locale.ROOT).startsWith("chapter ")
     }
 
-    private fun collectSearchDocuments(query:String,source:SourceItem,maxPages:Int):List<Document>{
-        val encoded=URLEncoder.encode(query,"UTF-8"); val base=source.baseUrl.trimEnd('/')
-        val candidates=if(isAzora(source))
-            listOf("$base/series/?searchTerm=$encoded","$base/series/?search=$encoded")
-        else listOf("$base/?s=$encoded","$base/search/?s=$encoded","$base/search?q=$encoded","$base/search/$encoded/","$base/?post_type=wp-manga&s=$encoded","$base/manga/?s=$encoded")
-        val docs=mutableListOf<Document>(); val visited=LinkedHashSet<String>(); var first:String?=null
-        for(u in candidates){
-            val d=fetchDocument(u) ?: continue
-            if(!isLikelySearchPage(d,query,u)) continue
-            docs+=d; visited+=u; first=u; break
+    private fun collectSearchDocuments(query: String, source: SourceItem, page: Int): List<Document> {
+        val encoded = URLEncoder.encode(query, "UTF-8")
+        val base = source.baseUrl.trimEnd('/')
+        val candidates = if (isAzora(source)) {
+            if (page <= 1) {
+                listOf("$base/series/?searchTerm=$encoded", "$base/series/?search=$encoded")
+            } else {
+                listOf(
+                    "$base/series/page/$page/?searchTerm=$encoded",
+                    "$base/series/?searchTerm=$encoded&page=$page"
+                )
+            }
+        } else if (page <= 1) {
+            listOf(
+                "$base/?s=$encoded&post_type=wp-manga",
+                "$base/?s=$encoded",
+                "$base/search/?s=$encoded"
+            )
+        } else {
+            listOf(
+                "$base/page/$page/?s=$encoded&post_type=wp-manga",
+                "$base/manga/page/$page/?s=$encoded",
+                "$base/?s=$encoded&paged=$page"
+            )
         }
-        if(first==null) return emptyList()
-        val queue=ArrayDeque<String>(); queue.addAll(discoverPaginationUrls(docs.first(),first,source)); var count=1
-        while(queue.isNotEmpty()&&count<maxPages){
-            val u=queue.removeFirst(); if(!visited.add(u)) continue
-            val d=fetchDocument(u) ?: continue
-            if(!isLikelySearchPage(d,query,u)) continue
-            docs+=d; count++; queue.addAll(discoverPaginationUrls(d,u,source).filter{!visited.contains(it)})
-        }
-        for(page in 2..maxPages){
-            if(count>=maxPages) break
-            val generated=if(isAzora(source))
-                listOf("$base/series/?searchTerm=$encoded&page=$page","$base/series/?searchTerm=$encoded&paged=$page")
-            else listOf("$base/page/$page/?s=$encoded","$base/?s=$encoded&paged=$page","$base/?s=$encoded&page=$page","$base/manga/page/$page/?s=$encoded")
-            for(u in generated){
-                if(!visited.add(u)) continue
-                val d=fetchDocument(u) ?: continue
-                if(!isLikelySearchPage(d,query,u)) continue
-                docs+=d; count++; if(count>=maxPages) break
+
+        // One search response per page. Avoid crawling many pages serially on every search.
+        for (url in candidates) {
+            val document = fetchDocument(url) ?: continue
+            if (parseSearchDocument(document, source).isNotEmpty()) {
+                return listOf(document)
             }
         }
-        return docs
+        return emptyList()
     }
 
     private fun collectBrowseDocuments(source:SourceItem,page:Int):List<Document>{
@@ -558,12 +561,14 @@ class ConnectorEngine {
         return result.toList()
     }
 
-    private fun fallbackSearchBySlug(query:String,source:SourceItem):List<MangaItem>{
-        val slug=query.trim().lowercase(Locale.ROOT).replace(Regex("[^a-z0-9\u0600-\u06ff]+"),"-").trim('-')
-        if(slug.isBlank()) return emptyList()
-        val base=source.baseUrl.trimEnd('/')
-        val urls=listOf("$base/manga/$slug/","$base/manhwa/$slug/","$base/manhua/$slug/","$base/comic/$slug/","$base/series/$slug/","$base/title/$slug")
-        return urls.mapNotNull{u->fetchDocument(u)?.let{parseSearchDocument(it,source).firstOrNull()}}
+    private fun fallbackSearchBySlug(query: String, source: SourceItem): List<MangaItem> {
+        val slug = query.trim().lowercase(Locale.ROOT)
+            .replace(Regex("[^a-z0-9\u0600-\u06ff]+"), "-").trim('-')
+        if (slug.isBlank()) return emptyList()
+        val base = source.baseUrl.trimEnd('/')
+        val url = if (isAzora(source)) "$base/series/$slug/" else "$base/manga/$slug/"
+        val document = fetchDocument(url) ?: return emptyList()
+        return parseSearchDocument(document, source).take(1)
     }
 
     private fun sitemapSearch(query:String,source:SourceItem):List<MangaItem>{

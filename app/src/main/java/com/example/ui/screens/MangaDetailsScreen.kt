@@ -184,11 +184,8 @@ fun MangaDetailsScreen(
                                     model = ImageRequest.Builder(context)
                                         .data(manga.coverUrl)
                                         .apply {
-                                            if (StarzConnector.isStarzImageUrl(manga.coverUrl)) {
-                                                StarzConnector.imageHeaders().forEach { (name, value) ->
-                                                    addHeader(name, value)
-                                                }
-                                            }
+                                            StarzConnector.imageHeadersFor(manga.sourceName, manga.coverUrl, manga.sourceBaseUrl)
+                                                .forEach { (name, value) -> addHeader(name, value) }
                                         }
                                         .crossfade(true)
                                         .build(),

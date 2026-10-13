@@ -16,7 +16,8 @@ data class MangaItem(
     val inLibrary: Boolean = false,
     val categoryIds: List<String> = emptyList(),
     val addedAt: Long = 0L,
-    val totalChaptersCount: Int = 0
+    val totalChaptersCount: Int = 0,
+    val sourceBaseUrl: String = ""
 ) : Serializable
 
 data class MangaCategory(

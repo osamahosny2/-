@@ -146,6 +146,7 @@ class MangaRepository(private val context: Context) {
                             genres = genresList,
                             sourceId = obj.optString("sourceId", "mangadex"),
                             sourceName = obj.optString("sourceName", "MangaDex"),
+                            sourceBaseUrl = obj.optString("sourceBaseUrl", ""),
                             inLibrary = true,
                             categoryIds = catList,
                             addedAt = obj.optLong("addedAt", System.currentTimeMillis())
@@ -232,6 +233,7 @@ class MangaRepository(private val context: Context) {
                 put("description", item.description)
                 put("sourceId", item.sourceId)
                 put("sourceName", item.sourceName)
+                put("sourceBaseUrl", item.sourceBaseUrl)
                 put("addedAt", item.addedAt)
                 put("categoryIds", JSONArray(item.categoryIds))
                 put("genres", JSONArray(item.genres))

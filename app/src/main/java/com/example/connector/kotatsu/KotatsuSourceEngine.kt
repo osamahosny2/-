@@ -19,14 +19,22 @@ import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
 import java.util.concurrent.ConcurrentHashMap
+import java.util.concurrent.TimeUnit
 
 class KotatsuSourceEngine {
-    private val client = OkHttpClient.Builder().cookieJar(AndroidCookieJar()).followRedirects(true).build()
+    private val client = OkHttpClient.Builder()
+        .cookieJar(AndroidCookieJar())
+        .connectTimeout(6, TimeUnit.SECONDS)
+        .readTimeout(10, TimeUnit.SECONDS)
+        .callTimeout(12, TimeUnit.SECONDS)
+        .followRedirects(true)
+        .build()
     private val context = AndroidMangaLoaderContext(
         client,
         "Mozilla/5.0 (Linux; Android 15; Mobile) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/128.0.0.0 Mobile Safari/537.36"
     )
-    private val parserCache = ConcurrentHashMap<String, MangaParser?>()
+    private val parserCache = ConcurrentHashMap<String, MangaParser>()
+    private val missingParserCache = ConcurrentHashMap.newKeySet<String>()
     private val parserSourceCandidates: List<Any> by lazy { loadParserSourceCandidates() }
 
     suspend fun searchManga(query: String, source: SourceItem, page: Int): Result<List<MangaItem>>? = withContext(Dispatchers.IO) {
@@ -88,32 +96,60 @@ class KotatsuSourceEngine {
 
     private fun resolveParser(source: SourceItem): MangaParser? {
         val cacheKey = source.id + "|" + source.baseUrl.trimEnd('/')
-        if (parserCache.containsKey(cacheKey)) return parserCache[cacheKey]
-        val wantedName = source.name.trim()
-        val wantedHost = runCatching { URI(source.baseUrl).host?.lowercase(Locale.ROOT)?.removePrefix("www.") }.getOrNull()
+        parserCache[cacheKey]?.let { return it }
+        if (missingParserCache.contains(cacheKey)) return null
+
+        val wantedName = normalizeSourceName(source.name)
+        val wantedHost = runCatching {
+            URI(source.baseUrl).host?.lowercase(Locale.ROOT)?.removePrefix("www.")
+        }.getOrNull()
 
         for (candidate in parserSourceCandidates) {
             if (readBoolean(candidate, "isBroken") == true) continue
             val candidateTitle = readString(candidate, "title") ?: readString(candidate, "name") ?: continue
-            if (candidateTitle.equals(wantedName, ignoreCase = true)) {
-                newParser(candidate)?.let { parserCache[cacheKey] = it; return it }
+            if (normalizeSourceName(candidateTitle) != wantedName) continue
+
+            val candidateHost = readString(candidate, "domain")?.let(::normalizeHost)
+            // A matching display name must not silently redirect a user-entered mirror to another host.
+            if (!wantedHost.isNullOrBlank() && !candidateHost.isNullOrBlank() && candidateHost != wantedHost) {
+                continue
             }
+            val parser = newParser(candidate) ?: continue
+            val parserHost = normalizeHost(parser.domain)
+            if (!wantedHost.isNullOrBlank() && parserHost.isNotBlank() && parserHost != wantedHost) {
+                continue
+            }
+            parserCache[cacheKey] = parser
+            missingParserCache.remove(cacheKey)
+            return parser
         }
 
         if (!wantedHost.isNullOrBlank()) {
             for (candidate in parserSourceCandidates) {
                 if (readBoolean(candidate, "isBroken") == true) continue
-                val parser = newParser(candidate) ?: continue
-                val parserHost = runCatching { URI(parser.domain).host?.lowercase(Locale.ROOT)?.removePrefix("www.") }.getOrNull()
-                if (parserHost == wantedHost) {
-                    parserCache[cacheKey] = parser
-                    return parser
+                // Compare source metadata before constructing a parser; this avoids instantiating
+                // hundreds of unrelated parsers for a user-added website.
+                val candidateDomain = readString(candidate, "domain") ?: continue
+                if (normalizeHost(candidateDomain) != wantedHost) continue
+                newParser(candidate)?.let {
+                    parserCache[cacheKey] = it
+                    missingParserCache.remove(cacheKey)
+                    return it
                 }
             }
         }
-        parserCache[cacheKey] = null
+
+        missingParserCache.add(cacheKey)
         return null
     }
+
+    private fun normalizeSourceName(value: String): String =
+        value.lowercase(Locale.ROOT).filter { it.isLetterOrDigit() }
+
+    private fun normalizeHost(value: String): String = runCatching {
+        val candidate = if (value.contains("://")) value else "https://$value"
+        URI(candidate).host.orEmpty().lowercase(Locale.ROOT).removePrefix("www.")
+    }.getOrDefault("")
 
     private fun newParser(source: Any): MangaParser? = runCatching {
         val method = context.javaClass.methods.firstOrNull { it.name == "newParserInstance" && it.parameterTypes.size == 1 }
@@ -160,7 +196,8 @@ class KotatsuSourceEngine {
             genres = manga.tags.map { it.toString() },
             sourceId = source.id,
             sourceName = source.name,
-            totalChaptersCount = manga.chapters?.size ?: 0
+            totalChaptersCount = manga.chapters?.size ?: 0,
+            sourceBaseUrl = source.baseUrl
         )
 
     private fun mapChapter(chapter: KotatsuChapter, mangaId: String): MangaChapter =

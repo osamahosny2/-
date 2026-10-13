@@ -20,8 +20,9 @@ import java.util.concurrent.TimeUnit
 
 class StarzConnector {
     private val client = OkHttpClient.Builder()
-        .connectTimeout(25, TimeUnit.SECONDS)
-        .readTimeout(35, TimeUnit.SECONDS)
+        .connectTimeout(6, TimeUnit.SECONDS)
+        .readTimeout(8, TimeUnit.SECONDS)
+        .callTimeout(10, TimeUnit.SECONDS)
         .followRedirects(true)
         .build()
 
@@ -64,7 +65,7 @@ class StarzConnector {
                 val seen = HashSet<String>()
                 val chapters = mutableListOf<MangaChapter>()
                 for (element in elements) {
-                    val href = absoluteUrl(element.attr("href"))
+                    val href = absoluteUrl(element.attr("href"), mangaUrl)
                     if (!isSameHost(href, mangaUrl) || !seen.add(href)) continue
                     val label = firstNonBlank(
                         element.text().trim(),
@@ -108,7 +109,7 @@ class StarzConnector {
                 )
                 for (selector in selectors) {
                     document.select(selector).forEach { image ->
-                        val url = bestImageUrl(image)
+                        val url = bestImageUrl(image, chapterUrl)
                         if (url.startsWith("http")) urls += url
                     }
                     if (urls.isNotEmpty()) break
@@ -127,29 +128,25 @@ class StarzConnector {
 
     private fun fetchSearch(base: String, query: String, page: Int): List<Document> {
         val encoded = URLEncoder.encode(query, "UTF-8")
-        val candidates = listOf(
-            base + "/?s=" + encoded + "&post_type=wp-manga",
-            base + "/manga/?s=" + encoded,
-            base + "/?s=" + encoded,
-            base + "/search/" + encoded + "/"
-        )
-        val first = candidates.asSequence()
-            .mapNotNull { fetchDocument(it) }
-            .firstOrNull { parseCards(it, sourceFor(base)).isNotEmpty() }
-            ?: return emptyList()
-        val docs = mutableListOf(first)
-        val next = LinkedHashSet<String>()
-        next += discoverNext(first, base)
-        for (p in 2..page.coerceAtMost(8)) {
-            next += base + "/manga/page/" + p + "/?s=" + encoded
-            next += base + "/page/" + p + "/?s=" + encoded + "&post_type=wp-manga"
+        val candidates = if (page <= 1) {
+            listOf(
+                "$base/?s=$encoded&post_type=wp-manga",
+                "$base/?s=$encoded"
+            )
+        } else {
+            listOf(
+                "$base/page/$page/?s=$encoded&post_type=wp-manga",
+                "$base/manga/page/$page/?s=$encoded"
+            )
         }
-        for (url in next) {
-            if (docs.size >= 8) break
-            val doc = fetchDocument(url) ?: continue
-            if (parseCards(doc, sourceFor(base)).isNotEmpty()) docs += doc
+
+        for (url in candidates) {
+            val document = fetchDocument(url) ?: continue
+            if (parseCards(document, sourceFor(base)).isNotEmpty()) {
+                return listOf(document)
+            }
         }
-        return docs
+        return emptyList()
     }
 
     private fun discoverNext(document: Document, base: String): List<String> =
@@ -158,30 +155,49 @@ class StarzConnector {
             .distinct()
 
     private fun parseCards(document: Document, source: SourceItem): List<MangaItem> {
+        val pageBase = document.location().ifBlank { source.baseUrl }
+        val cards = document.select(
+            ".page-item-detail.manga, .c-tabs-item__content, .manga__item, " +
+                ".bsx, .bs, .listupd .bs, article, .series-card"
+        )
         val results = mutableListOf<MangaItem>()
         val seen = HashSet<String>()
-        for (card in document.select(".page-item-detail.manga")) {
-            val anchor = card.selectFirst(
-                ".post-title a[href], .item-summary .post-title a[href], .item-thumb a[href]"
-            ) ?: continue
-            val href = absoluteUrl(anchor.attr("href"))
+
+        for (card in cards) {
+            val anchor = card.select("a[href]").firstOrNull { candidate ->
+                val href = absoluteUrl(candidate.attr("href"), pageBase)
+                isMangaUrl(href, source.baseUrl) &&
+                    !href.contains("/chapter-", ignoreCase = true) &&
+                    !href.contains("/chapter/", ignoreCase = true)
+            } ?: continue
+            val href = absoluteUrl(anchor.attr("href"), pageBase)
             if (!isMangaUrl(href, source.baseUrl) || !seen.add(href)) continue
+
             val title = firstNonBlank(
                 anchor.attr("title").trim(),
-                card.selectFirst(".post-title a, .post-title, h3, h4, h5")?.text()?.trim(),
+                card.selectFirst(".post-title a, .post-title, .tt, .title, .entry-title, h2, h3, h4, h5")
+                    ?.text()?.trim(),
                 anchor.text().trim(),
-                card.selectFirst("img")?.attr("alt")?.trim()
+                anchor.selectFirst("img")?.attr("alt")?.trim(),
+                card.selectFirst("img[alt]")?.attr("alt")?.trim()
             ) ?: continue
             if (!isValidTitle(title)) continue
-            val image = card.selectFirst(".item-thumb.c-image-hover img, .item-thumb img, img")
+
+            val image = card.selectFirst(
+                "img[data-srcset], img[data-lazy-srcset], img[data-src], " +
+                    "img[data-lazy-src], img[data-original], img[data-cfsrc], img[src]"
+            ) ?: anchor.selectFirst("img")
             results += MangaItem(
                 id = genericId(href),
                 title = title,
-                coverUrl = image?.let { bestImageUrl(it) }.orEmpty(),
-                author = card.selectFirst(".author-content a, .author a")?.text()?.trim().orEmpty(),
-                description = card.selectFirst(".summary-content, .post-content, .description, .excerpt")?.text()?.trim().orEmpty(),
+                coverUrl = image?.let { bestImageUrl(it, pageBase) }.orEmpty(),
+                author = card.selectFirst(".author-content a, .author a, .mg_author a")
+                    ?.text()?.trim().orEmpty(),
+                description = card.selectFirst(".summary-content, .post-content, .description, .excerpt")
+                    ?.text()?.trim().orEmpty(),
                 sourceId = source.id,
-                sourceName = source.name
+                sourceName = source.name,
+                sourceBaseUrl = source.baseUrl
             )
             if (results.size >= 500) break
         }
@@ -215,21 +231,35 @@ class StarzConnector {
         return builder.build()
     }
 
-    private fun bestImageUrl(image: Element): String {
-        val srcset = image.attr("srcset").trim()
+    private fun bestImageUrl(image: Element, pageUrl: String = BASE_URL): String {
+        val srcset = firstNonBlank(
+            image.attr("data-lazy-srcset"),
+            image.attr("data-srcset"),
+            image.attr("srcset")
+        ).orEmpty().trim()
         if (srcset.isNotBlank()) {
-            val candidate = srcset.split(",")
-                .map { it.trim().split(Regex("\\s+")) }
-                .mapNotNull { it.firstOrNull()?.takeIf { value -> value.startsWith("http") || value.startsWith("/") } }
-                .lastOrNull()
-            if (!candidate.isNullOrBlank()) return absoluteUrl(candidate)
+            val candidates = srcset.split(",").mapNotNull { entry ->
+                val parts = entry.trim().split(Regex("\s+"))
+                val url = parts.firstOrNull()?.takeIf { it.isNotBlank() } ?: return@mapNotNull null
+                val quality = parts.getOrNull(1)?.filter { it.isDigit() }?.toIntOrNull() ?: 0
+                url to quality
+            }
+            val candidate = candidates.maxByOrNull { it.second }?.first
+            if (!candidate.isNullOrBlank()) return absoluteUrl(candidate, pageUrl)
         }
-        return firstNonBlank(
-            image.attr("data-src"),
-            image.attr("data-lazy-src"),
+        val raw = firstNonBlank(
             image.attr("data-original"),
+            image.attr("data-lazy-src"),
+            image.attr("data-src"),
+            image.attr("data-echo"),
+            image.attr("data-cfsrc"),
             image.attr("src")
-        )?.let { absoluteUrl(it) }.orEmpty()
+        ).orEmpty().trim()
+        return if (raw.isBlank() || raw.startsWith("data:", true) || raw.contains("placeholder", true)) {
+            ""
+        } else {
+            absoluteUrl(raw, pageUrl)
+        }
     }
 
     private fun isMangaUrl(url: String, baseUrl: String): Boolean {
@@ -266,9 +296,17 @@ class StarzConnector {
         return null
     }
 
-    private fun absoluteUrl(raw: String): String {
-        if (raw.startsWith("http")) return raw
-        return try { URI(BASE_URL + "/").resolve(raw).toString() } catch (_: Exception) { raw }
+    private fun absoluteUrl(raw: String, baseUrl: String = BASE_URL): String {
+        val value = raw.trim()
+        if (value.isBlank()) return ""
+        if (value.startsWith("http://", true) || value.startsWith("https://", true)) return value
+        return try {
+            val origin = URI(baseUrl)
+            val safeBase = if (origin.scheme.isNullOrBlank()) URI("https://$baseUrl") else origin
+            safeBase.resolve(value).toString()
+        } catch (_: Exception) {
+            value
+        }
     }
 
     private fun isSameHost(url: String, base: String): Boolean =
@@ -304,13 +342,39 @@ class StarzConnector {
         fun isStarz(source: SourceItem?): Boolean =
             source?.baseUrl?.contains("starzmanga.com", true) == true ||
                 source?.baseUrl?.contains("manga-starz.net", true) == true ||
-                source?.name?.contains("starzmanga", true) == true
+                source?.name?.filter { it.isLetterOrDigit() }?.contains("starz", true) == true
 
-        fun isStarzImageUrl(url: String): Boolean =
-            url.contains("starz.starzmanga.com", true) ||
-                url.contains("starz.manga-starz.net", true)
+        fun isStarzImageUrl(url: String): Boolean {
+            val host = runCatching { URI(url).host.orEmpty().lowercase(Locale.ROOT) }.getOrDefault("")
+            return host == "starzmanga.com" || host.endsWith(".starzmanga.com") ||
+                host == "manga-starz.net" || host.endsWith(".manga-starz.net")
+        }
+
+        fun shouldUseStarzHeaders(sourceName: String, imageUrl: String): Boolean =
+            sourceName.filter { it.isLetterOrDigit() }.contains("starz", true) ||
+                isStarzImageUrl(imageUrl)
 
         fun imageHeaders(): Map<String, String> =
             mapOf("User-Agent" to BROWSER_USER_AGENT, "Referer" to (BASE_URL + "/"))
+
+        fun imageHeadersFor(
+            sourceName: String,
+            imageUrl: String,
+            sourceBaseUrl: String = ""
+        ): Map<String, String> {
+            val referer = if (shouldUseStarzHeaders(sourceName, imageUrl)) {
+                BASE_URL + "/"
+            } else {
+                sourceBaseUrl.trim().takeIf { it.startsWith("http", true) }
+                    ?.trimEnd('/')?.plus("/")
+                    ?: runCatching {
+                        val uri = URI(imageUrl)
+                        uri.scheme + "://" + uri.host + "/"
+                    }.getOrDefault("")
+            }
+            val headers = linkedMapOf("User-Agent" to BROWSER_USER_AGENT)
+            if (referer.isNotBlank()) headers["Referer"] = referer
+            return headers
+        }
     }
 }

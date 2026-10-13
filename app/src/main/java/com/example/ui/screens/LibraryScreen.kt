@@ -64,6 +64,7 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import coil.compose.AsyncImage
 import coil.request.ImageRequest
+import com.example.connector.StarzConnector
 import com.example.model.MangaCategory
 import com.example.model.MangaItem
 import com.example.ui.AppTab
@@ -464,6 +465,10 @@ fun MangaGridCard(
                     AsyncImage(
                         model = ImageRequest.Builder(context)
                             .data(manga.coverUrl)
+                            .apply {
+                                StarzConnector.imageHeadersFor(manga.sourceName, manga.coverUrl, manga.sourceBaseUrl)
+                                    .forEach { (name, value) -> addHeader(name, value) }
+                            }
                             .crossfade(true)
                             .build(),
                         contentDescription = manga.title,
