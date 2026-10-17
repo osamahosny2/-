@@ -306,8 +306,13 @@ class ProComicConnector {
         query: String
     ): List<MangaItem> {
         val anchors = LinkedHashSet<Element>()
+        // Older pages used /ar/series/{type}/{id}/{slug}; current pages also use
+        // direct IDs such as /ar/my-system-is-serious-139.
         anchors.addAll(document.select("a[href*='/series/']"))
         anchors.addAll(document.select("a[data-href*='/series/']"))
+        anchors.addAll(document.select("a[href^='/ar/'],a[href^='/en/']"))
+        anchors.addAll(document.select("a[href*='procomic.pro/ar/'],a[href*='procomic.pro/en/']"))
+        anchors.addAll(document.select("a[data-href*='/ar/'],a[data-href*='/en/']"))
 
         val results = LinkedHashMap<String, MangaItem>()
         for (anchor in anchors) {
@@ -551,8 +556,24 @@ class ProComicConnector {
     }
 
     private fun isSeriesUrl(url: String): Boolean {
-        val path = runCatching { URI(url).path.orEmpty() }.getOrDefault("")
-        return Regex("""/(?:[a-z]{2}/)?series/[^/?#]+/\d+(?:/|$)""", RegexOption.IGNORE_CASE).containsMatchIn(path + "/")
+        val path = runCatching { URI(url).path.orEmpty().trimEnd('/') }.getOrDefault("")
+        // Legacy series route: /ar/series/manhua/686/slug
+        if (Regex("""/(?:[a-z]{2}/)?series/[^/?#]+/\d+(?:/|$)""", RegexOption.IGNORE_CASE)
+                .containsMatchIn(path + "/")) return true
+
+        // Current catalogue route: /ar/my-system-is-serious-139 (also /en/...)
+        val segments = path.split('/').filter { it.isNotBlank() }
+        if (segments.size == 1) return isDirectSeriesSlug(segments[0])
+        if (segments.size == 2 && segments[0].lowercase(Locale.ROOT) in setOf("ar", "en")) {
+            return isDirectSeriesSlug(segments[1])
+        }
+        return false
+    }
+
+    private fun isDirectSeriesSlug(slug: String): Boolean {
+        val normalized = slug.lowercase(Locale.ROOT)
+        if (normalized in setOf("series", "chapter", "chapters", "updates", "search", "genres", "categories", "authors", "login", "register", "ar", "en")) return false
+        return Regex(""".+-\d+""", RegexOption.IGNORE_CASE).matches(slug)
     }
 
     private fun isImageUrl(url: String): Boolean =
