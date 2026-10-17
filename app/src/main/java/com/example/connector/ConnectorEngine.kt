@@ -25,6 +25,7 @@ class ConnectorEngine {
 
     private val kotatsuEngine = KotatsuSourceEngine()
     private val starzConnector = StarzConnector()
+    private val proComicConnector = ProComicConnector()
 
     private val client = OkHttpClient.Builder()
         .connectTimeout(6, TimeUnit.SECONDS)
@@ -41,6 +42,9 @@ class ConnectorEngine {
         withContext(Dispatchers.IO) {
             if (source == null) return@withContext Result.success(emptyList())
             try {
+                if (ProComicConnector.isProComic(source)) {
+                    return@withContext proComicConnector.searchManga(query.trim(), source, page)
+                }
                 if (StarzConnector.isStarz(source)) {
                     return@withContext starzConnector.searchManga(query.trim(), source, page)
                 }
@@ -73,6 +77,9 @@ class ConnectorEngine {
         source: SourceItem?
     ): Result<MangaItem> = withContext(Dispatchers.IO) {
         if (source == null) return@withContext Result.failure(Exception("Source is missing"))
+        if (ProComicConnector.isProComic(source)) {
+            return@withContext proComicConnector.fetchDetails(manga, source)
+        }
         kotatsuEngine.fetchDetails(manga, source)?.let { return@withContext it }
         Result.success(manga.copy(status = if (manga.status.isBlank()) "UNKNOWN" else manga.status))
     }
@@ -82,6 +89,9 @@ class ConnectorEngine {
         source: SourceItem? = null
     ): Result<List<MangaChapter>> = withContext(Dispatchers.IO) {
         try {
+            if (ProComicConnector.isProComic(source)) {
+                return@withContext proComicConnector.fetchChapters(mangaId, source!!)
+            }
             if (StarzConnector.isStarz(source)) {
                 return@withContext starzConnector.fetchChapters(mangaId, source!!)
             }
@@ -141,6 +151,9 @@ class ConnectorEngine {
         source: SourceItem? = null
     ): Result<List<MangaPage>> = withContext(Dispatchers.IO) {
         try {
+            if (ProComicConnector.isProComic(source)) {
+                return@withContext proComicConnector.fetchChapterPages(chapterId, source!!)
+            }
             if (StarzConnector.isStarz(source)) {
                 return@withContext starzConnector.fetchChapterPages(chapterId, source!!)
             }
@@ -220,6 +233,12 @@ class ConnectorEngine {
                     Request.Builder().url(imageUrl).apply {
                         StarzConnector.imageHeaders().forEach { (name, value) -> header(name, value) }
                     }.build()
+                } else if (ProComicConnector.isProComicUrl(imageUrl)) {
+                    Request.Builder().url(imageUrl)
+                        .header("User-Agent", userAgent)
+                        .header("Referer", "https://procomic.pro/ar/")
+                        .header("Accept", "image/avif,image/webp,image/apng,image/*,*/*;q=0.8")
+                        .build()
                 } else buildRequest(imageUrl)
                 val response = client.newCall(request).execute()
                 if (!response.isSuccessful) {
