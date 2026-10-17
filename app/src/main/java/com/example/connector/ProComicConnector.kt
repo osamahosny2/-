@@ -487,6 +487,9 @@ class ProComicConnector {
         return null
     }
 
+    private fun firstNonBlank(vararg values: String?): String? =
+        values.firstOrNull { !it.isNullOrBlank() }
+
     private fun mapStatus(value: String, fallback: String): String {
         val text = value.lowercase(Locale.ROOT)
         return when {
